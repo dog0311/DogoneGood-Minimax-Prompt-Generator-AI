@@ -2,9 +2,53 @@
 
 A Python/Tkinter desktop application for creating detailed MiniMax H3/Hailuo image-to-video prompts with help from a local vision-language model.
 
-If you want to work on it, all it needs are some bells and whistles. If you find an issue or a bug please report it and I will fix it as soon as possible.
-
 The current entry point is `minimax_i2v_app.py`.
+
+## Screenshots
+
+### Complete Application
+
+![Complete MiniMax H3 prompt generator window](assets/Screenshot%202026-09-09%20130129.png)
+
+The full application contains the local model controls, four reference-image cards, prompt fields, generated output, and action buttons in one scrollable window.
+
+### Local AI Model Settings
+
+![Local AI model settings](assets/Screenshot%202026-09-09%20130332.png)
+
+Choose Ollama or LM Studio and enter the vision model name.
+
+### Reference Image Card
+
+![Reference image card with analysis](assets/Screenshot%202026-09-09%20130353.png)
+
+Each card displays the selected image, its editable analysis, voice or speech style, and image actions.
+
+### Prompt Fields
+
+![Main subject prompt field](assets/Screenshot%202026-09-09%20130409.png)
+
+![Action and timing prompt field](assets/Screenshot%202026-09-09%20130432.png)
+
+Reference image names can be inserted into the action description at the cursor position.
+
+### Video Prompt Options
+
+![Video prompt options and negative prompt](assets/Screenshot%202026-09-09%20130612.png)
+
+Use the video option controls to refine mood, lighting, time of day, environment motion, audio, and negative prompts.
+
+### Generated Prompt
+
+![Generated MiniMax prompt output](assets/Screenshot%202026-09-09%20130643.png)
+
+The generated result can be edited, copied, or saved as a text, Markdown, or JSON file.
+
+### Earlier Director Console
+
+![Earlier MiniMax H3 director console](assets/Screenshot%202026-08-21%20135111.png)
+
+This earlier interface screenshot is included for reference when comparing the application's prompt and reference-image workflow.
 
 ## Features
 
@@ -122,6 +166,4 @@ readme.md               This documentation
 
 ## License
 
-Distributed under the MIT License.
-📄 License
 Distributed under the MIT License.
