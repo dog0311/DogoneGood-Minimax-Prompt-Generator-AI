@@ -4,7 +4,7 @@ A Python/Tkinter desktop application for creating detailed MiniMax H3/Hailuo ima
 
 If you want to work on it, all it needs are some bells and whistles. If you find an issue or a bug please report it and I will fix it as soon as possible.
 
-The current entry point is `minimax_i2v_apptest.py`.
+The current entry point is `minimax_i2v_app.py`.
 
 ## Features
 
@@ -73,14 +73,14 @@ http://127.0.0.1:1234/v1/chat/completions
 From the project directory:
 
 ```powershell
-python minimax_i2v_apptest.py
+python minimax_i2v_app.py
 ```
 
 The application window opens with the backend, reference-image, prompt-detail, generated-prompt, and action sections inside one vertically scrollable page.
 
 ## Backend and Model Settings
 
-On startup, the program looks for `mmsetup.ini` beside `minimax_i2v_apptest.py`.
+On startup, the program looks for `mmsetup.ini` beside `minimax_i2v_app.py`.
 
 If the file does not exist, it creates one with these defaults:
 
@@ -108,7 +108,7 @@ The generated prompt includes the reference descriptions, requested motion, came
 ## Project Files
 
 ```text
-minimax_i2v_apptest.py  Main application
+minimax_i2v_app.py  Main application
 mmsetup.ini             Created automatically for backend/model settings
 readme.md               This documentation
 ```
