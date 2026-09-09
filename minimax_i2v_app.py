@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import configparser
 import json
 import mimetypes
 import threading
@@ -15,6 +16,118 @@ from PIL import Image, ImageTk
 
 
 MAX_IMAGES = 4
+SETTINGS_FILE = "mmsetup.ini"
+
+
+_EDITABLE_WIDGETS = (tk.Entry, tk.Text, ttk.Entry, ttk.Combobox)
+_SCROLLABLE_WIDGETS = (tk.Text, tk.Canvas, tk.Listbox, ttk.Treeview)
+
+
+def _select_all(widget):
+    if isinstance(widget, tk.Text):
+        widget.tag_add("sel", "1.0", "end-1c")
+        widget.mark_set("insert", "end-1c")
+    elif isinstance(widget, (tk.Entry, ttk.Entry, ttk.Combobox)):
+        widget.selection_range(0, "end")
+        widget.icursor("end")
+
+    widget.focus_set()
+
+
+def _show_context_menu(event):
+    widget = event.widget
+    menu = tk.Menu(widget, tearoff=False)
+
+    if isinstance(widget, _EDITABLE_WIDGETS):
+        menu.add_command(label="Cut", command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Copy", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Paste", command=lambda: widget.event_generate("<<Paste>>"))
+        menu.add_separator()
+        menu.add_command(label="Select All", command=lambda: _select_all(widget))
+    else:
+        menu.add_command(label="Copy", command=lambda: widget.event_generate("<<Copy>>"))
+
+    try:
+        menu.tk_popup(event.x_root, event.y_root)
+    finally:
+        menu.grab_release()
+
+
+def _find_scrollable_widget(widget):
+    while widget is not None:
+        if isinstance(widget, _SCROLLABLE_WIDGETS):
+            return widget
+
+        parent_name = widget.winfo_parent()
+        if not parent_name:
+            break
+
+        try:
+            widget = widget.nametowidget(parent_name)
+        except KeyError:
+            break
+
+    return None
+
+
+def _scroll_under_pointer(event):
+    widget = _find_scrollable_widget(event.widget)
+    if widget is None:
+        return None
+
+    if event.num == 4:
+        amount = -1
+    elif event.num == 5:
+        amount = 1
+    else:
+        amount = -int(event.delta / 120) if event.delta else 0
+        amount = amount or (-1 if event.delta > 0 else 1)
+
+    widget.yview_scroll(amount, "units")
+    return "break"
+
+
+def install_widget_navigation(root: tk.Tk):
+    """Add context menus, scrollbars, and cross-platform wheel scrolling."""
+    root.bind_all("<Button-3>", _show_context_menu, add="+")
+    root.bind_all("<Button-4>", _scroll_under_pointer, add="+")
+    root.bind_all("<Button-5>", _scroll_under_pointer, add="+")
+    root.bind_all("<MouseWheel>", _scroll_under_pointer, add="+")
+
+    def attach_text_scrollbar(widget):
+        scrollbar = ttk.Scrollbar(
+            widget.master,
+            orient="vertical",
+            command=widget.yview,
+        )
+        scrollbar_visible = False
+
+        def update_scrollbar(first, last):
+            nonlocal scrollbar_visible
+            scrollbar.set(first, last)
+            needs_scrollbar = float(first) > 0 or float(last) < 1
+
+            if needs_scrollbar and not scrollbar_visible:
+                scrollbar.pack(side="right", fill="y")
+                scrollbar_visible = True
+            elif not needs_scrollbar and scrollbar_visible:
+                scrollbar.pack_forget()
+                scrollbar_visible = False
+
+        widget.configure(yscrollcommand=update_scrollbar)
+        widget.after_idle(lambda: widget.yview_moveto(0))
+
+    def add_scrollbars(parent):
+        for child in parent.winfo_children():
+            if isinstance(child, (tk.Text, tk.Listbox)) and not getattr(
+                child, "_navigation_scrollbar", False
+            ):
+                attach_text_scrollbar(child)
+                setattr(child, "_navigation_scrollbar", True)
+
+            add_scrollbars(child)
+
+    add_scrollbars(root)
 
 
 @dataclass
@@ -86,8 +199,16 @@ class ImageCard:
 
         parent.grid_columnconfigure(index, weight=1)
 
-        self.preview_button = tk.Button(
+        self.preview_frame = tk.Frame(
             self.frame,
+            width=220,
+            height=150,
+        )
+        self.preview_frame.pack_propagate(False)
+        self.preview_frame.pack()
+
+        self.preview_button = tk.Button(
+            self.preview_frame,
             text="Click to select image",
             width=22,
             height=8,
@@ -171,6 +292,14 @@ class ImageCard:
         )
         clear_button.pack(side="left", expand=True, fill="x", padx=(3, 0))
 
+        add_reference_button = tk.Button(
+            button_row,
+            text=f"Add image_reference{self.index + 1}",
+            command=lambda: self.app.insert_reference_name(self.index),
+            font=("Segoe UI", 9),
+        )
+        add_reference_button.pack(side="left", expand=True, fill="x", padx=(3, 0))
+
     def select_image(self):
         filename = filedialog.askopenfilename(
             title="Choose a reference image",
@@ -246,6 +375,7 @@ class ImageCard:
             )
 
     def _apply_analysis(self, description: str):
+        self.reference.description = description
         self.description.delete("1.0", "end")
         self.description.insert("1.0", description)
         self.analyze_button.configure(state="normal", text="Analyze")
@@ -265,9 +395,39 @@ class ImageCard:
 class MiniMaxApp:
     def __init__(self, root: tk.Tk):
         self.root = root
+        self.setup_path = Path(__file__).resolve().parent / SETTINGS_FILE
         self.root.title("MiniMax H3 Image-to-Video Prompt Generator")
         self.root.geometry("1420x960")
         self.root.minsize(1100, 760)
+
+        self.page_canvas = tk.Canvas(self.root, highlightthickness=0)
+        self.page_scrollbar = ttk.Scrollbar(
+            self.root,
+            orient="vertical",
+            command=self.page_canvas.yview,
+        )
+        self.page_frame = tk.Frame(self.page_canvas)
+        self.page_frame.bind(
+            "<Configure>",
+            lambda _event: self.page_canvas.configure(
+                scrollregion=self.page_canvas.bbox("all")
+            ),
+        )
+        self.page_window = self.page_canvas.create_window(
+            (0, 0),
+            window=self.page_frame,
+            anchor="nw",
+        )
+        self.page_canvas.configure(yscrollcommand=self.page_scrollbar.set)
+        self.page_canvas.pack(side="left", fill="both", expand=True)
+        self.page_scrollbar.pack(side="right", fill="y")
+        self.page_canvas.bind(
+            "<Configure>",
+            lambda event: self.page_canvas.itemconfigure(
+                self.page_window,
+                width=event.width,
+            ),
+        )
 
         self.style = ttk.Style()
         try:
@@ -277,8 +437,11 @@ class MiniMaxApp:
 
         self.cards: list[ImageCard] = []
 
-        self.backend_var = tk.StringVar(value="Ollama")
-        self.model_var = tk.StringVar(value="llava")
+        backend, model = self.load_setup_values()
+        self.backend_var = tk.StringVar(value=backend)
+        self.model_var = tk.StringVar(value=model)
+        self.backend_var.trace_add("write", self.save_setup_values)
+        self.model_var.trace_add("write", self.save_setup_values)
         self.duration_var = tk.StringVar(value="5 seconds")
         self.aspect_ratio_var = tk.StringVar(value="16:9")
         self.shot_type_var = tk.StringVar(value="Medium shot")
@@ -297,9 +460,46 @@ class MiniMaxApp:
 
         self.build_interface()
 
+    def load_setup_values(self) -> tuple[str, str]:
+        defaults = ("Ollama", "llava")
+        config = configparser.ConfigParser()
+
+        if not self.setup_path.exists():
+            self.write_setup_values(*defaults)
+            return defaults
+
+        try:
+            config.read(self.setup_path, encoding="utf-8")
+            settings = config["settings"]
+            backend = settings.get("backend", defaults[0]).strip() or defaults[0]
+            model = settings.get("model", defaults[1]).strip() or defaults[1]
+        except (configparser.Error, KeyError, OSError):
+            backend, model = defaults
+
+        return backend, model
+
+    def save_setup_values(self, *_args):
+        self.write_setup_values(
+            self.backend_var.get(),
+            self.model_var.get(),
+        )
+
+    def write_setup_values(self, backend: str, model: str):
+        config = configparser.ConfigParser()
+        config["settings"] = {
+            "backend": backend,
+            "model": model,
+        }
+
+        try:
+            with self.setup_path.open("w", encoding="utf-8") as setup_file:
+                config.write(setup_file)
+        except OSError:
+            pass
+
     def build_interface(self):
         title = tk.Label(
-            self.root,
+            self.page_frame,
             text="MiniMax H3 Image-to-Video Prompt Generator",
             font=("Segoe UI", 18, "bold"),
             pady=10,
@@ -307,7 +507,7 @@ class MiniMaxApp:
         title.pack()
 
         subtitle = tk.Label(
-            self.root,
+            self.page_frame,
             text=(
                 "Choose up to four reference images, describe the action, "
                 "then generate a complete prompt."
@@ -324,7 +524,7 @@ class MiniMaxApp:
 
     def build_backend_bar(self):
         frame = tk.LabelFrame(
-            self.root,
+            self.page_frame,
             text="Local AI Model",
             padx=10,
             pady=8,
@@ -369,7 +569,7 @@ class MiniMaxApp:
 
     def build_images_section(self):
         frame = tk.LabelFrame(
-            self.root,
+            self.page_frame,
             text="Reference Images",
             padx=8,
             pady=8,
@@ -383,7 +583,7 @@ class MiniMaxApp:
 
     def build_prompt_fields(self):
         outer = tk.LabelFrame(
-            self.root,
+            self.page_frame,
             text="Video Prompt Details",
             padx=8,
             pady=8,
@@ -391,30 +591,8 @@ class MiniMaxApp:
         )
         outer.pack(fill="both", expand=True, padx=12, pady=6)
 
-        canvas = tk.Canvas(outer, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(
-            outer,
-            orient="vertical",
-            command=canvas.yview,
-        )
-        scroll_frame = tk.Frame(canvas)
-
-        scroll_frame.bind(
-            "<Configure>",
-            lambda event: canvas.configure(
-                scrollregion=canvas.bbox("all")
-            ),
-        )
-
-        canvas.create_window(
-            (0, 0),
-            window=scroll_frame,
-            anchor="nw",
-        )
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        scroll_frame = tk.Frame(outer)
+        scroll_frame.pack(fill="x", expand=True)
 
         self.add_large_text_field(
             scroll_frame,
@@ -723,6 +901,20 @@ class MiniMaxApp:
         combo.pack(side="left", fill="x", expand=True)
 
         ToolTip(combo, hint)
+
+    def insert_reference_name(self, index: int):
+        action_widget = getattr(self, "field_Action and timing", None)
+        if action_widget is None:
+            return
+
+        placeholder = "What should happen in the video?"
+        if action_widget.get("1.0", "end").strip() == placeholder:
+            action_widget.delete("1.0", "end")
+            action_widget.configure(foreground="black")
+
+        reference_name = f"image_reference{index + 1}"
+        action_widget.focus_set()
+        action_widget.insert("insert", reference_name)
 
     def get_text_field(self, field_name: str) -> str:
         widget = getattr(self, f"field_{field_name}")
@@ -1117,7 +1309,7 @@ Do not add explanations outside those sections.
 
     def build_output_section(self):
         frame = tk.LabelFrame(
-            self.root,
+            self.page_frame,
             text="Generated Prompt",
             padx=8,
             pady=8,
@@ -1139,7 +1331,7 @@ Do not add explanations outside those sections.
         )
 
     def build_bottom_bar(self):
-        frame = tk.Frame(self.root, padx=12, pady=8)
+        frame = tk.Frame(self.page_frame, padx=12, pady=8)
         frame.pack(fill="x")
 
         self.generate_button = tk.Button(
@@ -1199,6 +1391,7 @@ Do not add explanations outside those sections.
 def main():
     root = tk.Tk()
     MiniMaxApp(root)
+    install_widget_navigation(root)
     root.mainloop()
 
 
